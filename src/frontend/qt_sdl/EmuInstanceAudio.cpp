@@ -164,6 +164,26 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
     EmuInstance* inst = (EmuInstance*)data;
     len /= (sizeof(s16) * 2);
 
+    if (inst->coopClient.isConnected())
+    {
+        // co-op client: play the host's audio stream (there is no local NDS)
+        int n = inst->coopClient.popAudio((s16*)stream, len);
+        if (inst->audioMutedToggle) n = 0;
+        memset(stream + n * sizeof(s16) * 2, 0, (len - n) * sizeof(s16) * 2);
+        if (inst->audioVolume < 256)
+        {
+            s16* samples = (s16*) stream;
+            for (int i = 0; i < n * 2; i++)
+                samples[i] = ((s32) samples[i] * inst->audioVolume) >> 8;
+        }
+        return;
+    }
+    if (!inst->nds)
+    {
+        memset(stream, 0, len * sizeof(s16) * 2);
+        return;
+    }
+
     double skew = std::max(inst->targetFPS / INTERNAL_FRAME_RATE, 0.5);
     inst->nds->SPU.SetOutputSkew(skew);
 
@@ -174,6 +194,8 @@ void EmuInstance::audioCallback(void* data, Uint8* stream, int len)
     int num_in = inst->nds->SPU.ReadOutput((s16*) stream, len_in);
     SDL_CondSignal(inst->audioSyncCond);
     SDL_UnlockMutex(inst->audioSyncLock);
+
+    if (num_in > 0) inst->coopHost.pushAudio((const s16*) stream, num_in, inst->audioFreq);
 
     if ((num_in < 1) || inst->audioMutedByWindowFocus || inst->audioMutedToggle || inst->audioMutedByFastForward)
     {

@@ -70,6 +70,8 @@ EmuThread::EmuThread(EmuInstance* inst, QObject* parent) : QThread(parent)
 void EmuThread::attachWindow(MainWindow* window)
 {
     connect(this, SIGNAL(windowTitleChange(QString)), window, SLOT(onTitleUpdate(QString)));
+    connect(this, SIGNAL(coopClientMessage(QString)), window, SLOT(onCoopClientMessage(QString)));
+    connect(this, SIGNAL(coopClientConnected()), window, SLOT(onCoopClientConnected()));
     connect(this, SIGNAL(windowEmuStart()), window, SLOT(onEmuStart()));
     connect(this, SIGNAL(windowEmuStop()), window, SLOT(onEmuStop()));
     connect(this, SIGNAL(windowEmuPause(bool)), window, SLOT(onEmuPause(bool)));
@@ -88,6 +90,8 @@ void EmuThread::attachWindow(MainWindow* window)
 void EmuThread::detachWindow(MainWindow* window)
 {
     disconnect(this, SIGNAL(windowTitleChange(QString)), window, SLOT(onTitleUpdate(QString)));
+    disconnect(this, SIGNAL(coopClientMessage(QString)), window, SLOT(onCoopClientMessage(QString)));
+    disconnect(this, SIGNAL(coopClientConnected()), window, SLOT(onCoopClientConnected()));
     disconnect(this, SIGNAL(windowEmuStart()), window, SLOT(onEmuStart()));
     disconnect(this, SIGNAL(windowEmuStop()), window, SLOT(onEmuStop()));
     disconnect(this, SIGNAL(windowEmuPause(bool)), window, SLOT(onEmuPause(bool)));
@@ -150,8 +154,22 @@ void EmuThread::run()
     emuInstance->fastForwardToggled = false;
     emuInstance->slowmoToggled = false;
 
+    char coopLastTitle[100] = "";
+    {
+        std::string n = emuInstance->getLocalConfig().GetString("Firmware.Username");
+        emuInstance->coopHost.setHostName(n.empty() ? "Host" : n);
+    }
+
     while (emuStatus != emuStatus_Exit)
     {
+        // booting a ROM ends co-op client mode
+        if (emuActive && emuInstance->coopClient.isActive())
+        {
+            emuInstance->coopClient.requestDisconnect();
+            emuInstance->coopClient.frame(0xFFF, false, 0, 0, 0);
+            emuInstance->coopClient.takeMessage();
+        }
+
         if (emuInstance->instanceID == 0)
             MPInterface::Get().Process();
 
@@ -252,10 +270,30 @@ void EmuThread::run()
             }
 
             // process input and hotkeys
-            emuInstance->nds->SetKeyMask(emuInstance->inputMask);
+            {
+                u32 keys = emuInstance->inputMask;
+                bool touching = emuInstance->isTouching;
+                u16 tx = emuInstance->touchX, ty = emuInstance->touchY;
+                emuInstance->coopHost.preFrame(emuInstance->nds, keys, touching, tx, ty);
+                if (const char* st = emuInstance->coopHost.takeStatus())
+                    emuInstance->osdAddMessage(0xFFFFFF, "%s", st);
+                for (std::string ev; emuInstance->coopHost.takeEvent(ev);)
+                    emuInstance->osdAddMessage(0x80C0FF, "%s", ev.c_str());
+                if (emuInstance->coopHost.takeActiveChanged())
+                {
+                    int ap = emuInstance->coopHost.activePlayer();
+                    if (ap == 1) emuInstance->osdAddMessage(0x80FF80, "Coop: Du (Spieler 1) bist am Zug");
+                    else if (ap > 1) emuInstance->osdAddMessage(0xFFC040, "Coop: Spieler %d ist am Zug", ap);
+                }
+                emuInstance->coopDebug.preFrame(emuInstance, emuInstance->nds, keys);
+                emuInstance->nds->SetKeyMask(keys);
+                emuInstance->coopInputTouching = touching;
+                emuInstance->coopInputX = tx;
+                emuInstance->coopInputY = ty;
+            }
 
-            if (emuInstance->isTouching)
-                emuInstance->nds->TouchScreen(emuInstance->touchX, emuInstance->touchY);
+            if (emuInstance->coopInputTouching)
+                emuInstance->nds->TouchScreen(emuInstance->coopInputX, emuInstance->coopInputY);
             else
                 emuInstance->nds->ReleaseScreen();
 
@@ -319,6 +357,9 @@ void EmuThread::run()
 
             if (emuInstance->firmwareSave)
                 emuInstance->firmwareSave->CheckFlush();
+
+            emuInstance->coopHost.postFrame(emuInstance->nds);
+            emuInstance->coopDebug.postFrame(emuInstance->nds, emuInstance->coopHost.activePlayer(), emuInstance->coopHost.numClients());
 
             emuInstance->drawScreen();
 
@@ -425,9 +466,52 @@ void EmuThread::run()
                 changeWindowTitle(melontitle);
             }
         }
+        else if (emuInstance->coopClient.isActive() && !emuActive)
+        {
+            // co-op client mode: no local emulation, show the host's stream and send our pad
+            CoopClient& cc = emuInstance->coopClient;
+            bool wasConnected = cc.isConnected();
+            bool newFrame = cc.frame(emuInstance->inputMask, emuInstance->isTouching,
+                                     emuInstance->touchX, emuInstance->touchY,
+                                     emuInstance->coopHost.takeLocalHotkey());
+            if (cc.isConnected() && !wasConnected)
+            {
+                emuInstance->audioEnable();
+                emit coopClientConnected();
+            }
+            if (!cc.isConnected() && wasConnected) emuInstance->audioDisable();
+
+            if (cc.isConnected())
+            {
+                int me = cc.myPlayer(), ap = cc.activePlayer();
+                if (ap == 0) snprintf(melontitle, sizeof(melontitle), "PMD Coop - Spieler %d (Host hat kein Coop-ROM geladen)", me);
+                else if (ap == me) snprintf(melontitle, sizeof(melontitle), "PMD Coop - Spieler %d - DEIN ZUG!", me);
+                else snprintf(melontitle, sizeof(melontitle), "PMD Coop - Spieler %d - Spieler %d ist am Zug (%d Spieler)", me, ap, cc.numPlayers());
+            }
+            else if (cc.isActive())
+                snprintf(melontitle, sizeof(melontitle), "PMD Coop - verbinde...");
+            else
+                snprintf(melontitle, sizeof(melontitle), "melonDS " MELONDS_VERSION);
+            if (strcmp(melontitle, coopLastTitle) != 0)
+            {
+                strncpy(coopLastTitle, melontitle, sizeof(coopLastTitle) - 1);
+                changeWindowTitle(melontitle);
+            }
+
+            std::string msg = cc.takeMessage();
+            if (!msg.empty()) emit coopClientMessage(QString::fromStdString(msg));
+
+            if (newFrame || !cc.isConnected())
+            {
+                emuInstance->drawScreen();
+                emit windowUpdate();
+            }
+            SDL_Delay(newFrame ? 1 : 2);
+        }
         else
         {
             // paused
+            coopLastTitle[0] = 0;
             nframes = 0;
             lastTime = SDL_GetPerformanceCounter() * perfCountsSec;
             lastMeasureTime = lastTime;

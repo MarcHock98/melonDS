@@ -143,6 +143,8 @@ public:
 signals:
     void windowUpdate();
     void windowTitleChange(QString title);
+    void coopClientMessage(QString text);
+    void coopClientConnected();
 
     void windowEmuStart();
     void windowEmuStop();

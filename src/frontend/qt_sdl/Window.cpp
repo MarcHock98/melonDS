@@ -66,6 +66,8 @@
 #include "Savestate.h"
 #include "MPInterface.h"
 #include "LANDialog.h"
+#include "CoopJoinDialog.h"
+#include <random>
 
 //#include "main_shaders.h"
 
@@ -423,6 +425,19 @@ MainWindow::MainWindow(int id, EmuInstance* inst, QWidget* parent) :
 
                 actLANStartClient = submenu->addAction("Join LAN game");
                 connect(actLANStartClient, &QAction::triggered, this, &MainWindow::onLANStartClient);
+
+                submenu->addSeparator();
+
+                actCoopHost = submenu->addAction("PMD Coop: LAN-Host (Port 7064)");
+                actCoopHost->setCheckable(true);
+                actCoopHost->setChecked(emuInstance->coopHost.wantsActive());
+                connect(actCoopHost, &QAction::triggered, this, &MainWindow::onCoopHostToggled);
+
+                actCoopJoin = submenu->addAction("PMD Coop: Beitreten...");
+                connect(actCoopJoin, &QAction::triggered, this, &MainWindow::onCoopJoin);
+
+                actCoopLeave = submenu->addAction("PMD Coop: Verbindung trennen");
+                connect(actCoopLeave, &QAction::triggered, this, &MainWindow::onCoopLeave);
 
                 /*submenu->addSeparator();
 
@@ -1739,6 +1754,77 @@ void MainWindow::onOpenTitleManager()
 void MainWindow::onMPNewInstance()
 {
     createEmuInstance();
+}
+
+void MainWindow::onCoopHostToggled(bool checked)
+{
+    if (checked) emuInstance->coopHost.requestStart(Coop::DefaultPort);
+    else emuInstance->coopHost.requestStop();
+}
+
+void MainWindow::onCoopJoin()
+{
+    if (emuThread->emuIsActive())
+    {
+        QMessageBox::information(this, "PMD Coop",
+            "In diesem Fenster läuft ein Spiel. Zum Beitreten bitte zuerst das Spiel beenden (System > Stop) "
+            "oder ein zweites melonDS starten.");
+        return;
+    }
+
+    QString last = QString::fromStdString(globalCfg.GetString("Coop.LastHost"));
+    if (last.isEmpty()) last = "127.0.0.1";
+    CoopJoinDialog dlg(last, this);
+    if (dlg.exec() != QDialog::Accepted) return;
+    QString text = dlg.address();
+    if (text.isEmpty()) return;
+
+    QString hostName = text;
+    int port = Coop::DefaultPort;
+    int colon = text.lastIndexOf(':');
+    if (colon > 0)
+    {
+        bool portOk = false;
+        int p = text.mid(colon + 1).toInt(&portOk);
+        if (portOk && p > 0 && p < 65536) { port = p; hostName = text.left(colon); }
+    }
+
+    globalCfg.SetString("Coop.LastHost", text.toStdString());
+    Config::Save();
+
+    std::string name = localCfg.GetString("Firmware.Username");
+    if (name.empty()) name = "Spieler";
+
+    // stable random id so the host can give us our old player slot back after a disconnect;
+    // mixed with the instance number so two melonDS windows on one PC stay distinct
+    int id = globalCfg.GetInt("Coop.ClientId");
+    if (id == 0)
+    {
+        std::random_device rd;
+        id = (int)(rd() | 1u);
+        globalCfg.SetInt("Coop.ClientId", id);
+        Config::Save();
+    }
+    uint32_t clientId = (uint32_t)id ^ ((uint32_t)emuInstance->getInstanceID() * 0x9E3779B9u);
+    if (clientId == 0) clientId = 1;
+    emuInstance->coopClient.requestConnect(hostName.toStdString(), (uint16_t)port, name, clientId);
+}
+
+void MainWindow::onCoopLeave()
+{
+    emuInstance->coopClient.requestDisconnect();
+}
+
+void MainWindow::onCoopClientConnected()
+{
+    // make sure key presses reach the game right away (the window uses click-to-focus)
+    activateWindow();
+    setFocus();
+}
+
+void MainWindow::onCoopClientMessage(QString text)
+{
+    QMessageBox::information(this, "PMD Coop", text);
 }
 
 void MainWindow::onLANStartHost()

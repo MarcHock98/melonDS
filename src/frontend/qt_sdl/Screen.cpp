@@ -253,7 +253,7 @@ void ScreenPanel::resizeEvent(QResizeEvent* event)
 void ScreenPanel::mousePressEvent(QMouseEvent* event)
 {
     event->accept();
-    if (!emuInstance->emuIsActive()) { touching = false; return; }
+    if (!emuInstance->screenIsLive()) { touching = false; return; }
     if (event->button() != Qt::LeftButton) return;
 
     int x = event->pos().x();
@@ -269,7 +269,7 @@ void ScreenPanel::mousePressEvent(QMouseEvent* event)
 void ScreenPanel::mouseReleaseEvent(QMouseEvent* event)
 {
     event->accept();
-    if (!emuInstance->emuIsActive()) { touching = false; return; }
+    if (!emuInstance->screenIsLive()) { touching = false; return; }
     if (event->button() != Qt::LeftButton) return;
 
     if (touching)
@@ -285,7 +285,7 @@ void ScreenPanel::mouseMoveEvent(QMouseEvent* event)
 
     showCursor();
 
-    if (!emuInstance->emuIsActive()) return;
+    if (!emuInstance->screenIsLive()) return;
     //if (!(event->buttons() & Qt::LeftButton)) return;
     if (!touching) return;
 
@@ -301,7 +301,7 @@ void ScreenPanel::mouseMoveEvent(QMouseEvent* event)
 void ScreenPanel::tabletEvent(QTabletEvent* event)
 {
     event->accept();
-    if (!emuInstance->emuIsActive()) { touching = false; return; }
+    if (!emuInstance->screenIsLive()) { touching = false; return; }
 
     switch(event->type())
     {
@@ -343,7 +343,7 @@ void ScreenPanel::touchEvent(QTouchEvent* event)
 #endif
 
     event->accept();
-    if (!emuInstance->emuIsActive()) { touching = false; return; }
+    if (!emuInstance->screenIsLive()) { touching = false; return; }
 
     switch(event->type())
     {
@@ -781,9 +781,20 @@ void ScreenPanelNative::setupScreenLayout()
 void ScreenPanelNative::drawScreen()
 {
     auto emuThread = emuInstance->getEmuThread();
-    if (!emuThread->emuIsActive())
+    if (!emuInstance->screenIsLive())
     {
         hasBuffers = false;
+        return;
+    }
+
+    if (emuInstance->getCoopClient().isConnected())
+    {
+        // co-op client: show the host's stream
+        bufferLock.lock();
+        topBuffer = (void*)emuInstance->getCoopClient().topBuffer();
+        bottomBuffer = (void*)emuInstance->getCoopClient().bottomBuffer();
+        hasBuffers = true;
+        bufferLock.unlock();
         return;
     }
 
@@ -804,7 +815,7 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
 
     auto emuThread = emuInstance->getEmuThread();
     
-    if (emuThread->emuIsActive())
+    if (emuInstance->screenIsLive())
     {
         emuInstance->renderLock.lock();
 
@@ -828,7 +839,7 @@ void ScreenPanelNative::paintEvent(QPaintEvent* event)
 
     osdUpdate();
 
-    if (!emuThread->emuIsActive())
+    if (!emuInstance->screenIsLive())
     {
         // splashscreen
         osdMutex.lock();
@@ -1124,7 +1135,7 @@ void ScreenPanelGL::drawScreen()
 
     glViewport(0, 0, w, h);
 
-    if (emuThread->emuIsActive())
+    if (emuInstance->screenIsLive())
     {
         auto nds = emuInstance->getNDS();
 
@@ -1132,7 +1143,13 @@ void ScreenPanelGL::drawScreen()
         glUniform2f(screenShaderScreenSizeULoc, w / factor, h / factor);
 
         void* topbuf; void* bottombuf;
-        if (nds->GPU.GetFramebuffers(&topbuf, &bottombuf))
+        bool coopStream = emuInstance->getCoopClient().isConnected();
+        if (coopStream)
+        {
+            topbuf = (void*)emuInstance->getCoopClient().topBuffer();
+            bottombuf = (void*)emuInstance->getCoopClient().bottomBuffer();
+        }
+        if (coopStream || nds->GPU.GetFramebuffers(&topbuf, &bottombuf))
         {
             // if we're doing a regular render, use the provided framebuffers
             // otherwise, GetFramebuffers() will set up the required state
@@ -1173,7 +1190,7 @@ void ScreenPanelGL::drawScreen()
 
     osdUpdate();
 
-    if (!emuThread->emuIsActive())
+    if (!emuInstance->screenIsLive())
     {
         // splashscreen
         osdMutex.lock();

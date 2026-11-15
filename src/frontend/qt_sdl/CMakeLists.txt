@@ -59,6 +59,9 @@ set(SOURCES_QT_SDL
     CLI.cpp
 
     LANDialog.cpp
+    CoopLink.cpp
+    CoopDebug.cpp
+    CoopJoinDialog.cpp
     NetplayDialog.cpp
 )
 
@@ -98,6 +101,22 @@ add_subdirectory("../../net"
     ${CMAKE_BINARY_DIR}/net)
 
 target_link_libraries(melonDS PRIVATE net-utils)
+
+# --- PMD co-op LAN (host in melonDS, standalone client) ---
+if (USE_VCPKG)
+    find_package(unofficial-enet CONFIG REQUIRED)
+    set(COOP_ENET unofficial::enet::enet)
+else()
+    pkg_check_modules(CoopENet REQUIRED IMPORTED_TARGET libenet)
+    set(COOP_ENET PkgConfig::CoopENet)
+endif()
+target_link_libraries(melonDS PRIVATE ${COOP_ENET})
+
+add_executable(pmdcoop_client ../../coop/client.cpp)
+target_link_libraries(pmdcoop_client PRIVATE PkgConfig::SDL2 PkgConfig::Zstd ${COOP_ENET})
+if (WIN32)
+    target_link_libraries(pmdcoop_client PRIVATE ws2_32 winmm)
+endif()
 
 if (WIN32)
     target_link_libraries(melonDS PUBLIC opengl32)

@@ -125,6 +125,17 @@ void EmuInstance::inputLoadConfig()
         joyMapping[i] = joycfg.GetInt(buttonNames[i]);
     }
 
+    // PMD co-op default keyboard layout (used for every button that is unmapped):
+    // WASD = d-pad, E = A, Q = B, R = X (menu), F = Y, Shift = R (diagonal), C = L,
+    // Return = Start, Backspace = Select. Number keys are co-op hotkeys (see onKeyPress).
+    static const int coopDefaultKeys[12] = {
+        Qt::Key_E, Qt::Key_Q, Qt::Key_Backspace, Qt::Key_Return,
+        Qt::Key_D, Qt::Key_A, Qt::Key_W, Qt::Key_S,
+        Qt::Key_Shift, Qt::Key_C, Qt::Key_R, Qt::Key_F
+    };
+    for (int i = 0; i < 12; i++)
+        if (keyMapping[i] == -1) keyMapping[i] = coopDefaultKeys[i];
+
     for (int i = 0; i < HK_MAX; i++)
     {
         hkKeyMapping[i] = keycfg.GetInt(hotkeyNames[i]);
@@ -337,6 +348,10 @@ void EmuInstance::onKeyPress(QKeyEvent* event)
     for (int i = 0; i < HK_MAX; i++)
         if (keyHK == hkKeyMapping[i])
             keyHotkeyMask |= (1<<i);
+
+    // co-op hotkeys: 1-4 = use move 1-4, 5-9 and 0 = item slot 1-6
+    if (!event->isAutoRepeat() && keyKP >= Qt::Key_0 && keyKP <= Qt::Key_9)
+        coopHost.pressHotkey(keyKP == Qt::Key_0 ? 10 : keyKP - Qt::Key_0);
 }
 
 void EmuInstance::onKeyRelease(QKeyEvent* event)

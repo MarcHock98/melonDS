@@ -132,6 +132,11 @@ private slots:
     void onOpenTitleManager();
     void onMPNewInstance();
     void onLANStartHost();
+    void onCoopHostToggled(bool checked);
+    void onCoopJoin();
+    void onCoopLeave();
+    void onCoopClientMessage(QString text);
+    void onCoopClientConnected();
     void onLANStartClient();
     void onNPStartHost();
     void onNPStartClient();
@@ -256,6 +261,9 @@ public:
     QAction* actTitleManager;
     QAction* actMPNewInstance;
     QAction* actLANStartHost;
+    QAction* actCoopHost;
+    QAction* actCoopJoin;
+    QAction* actCoopLeave;
     QAction* actLANStartClient;
     QAction* actNPStartHost;
     QAction* actNPStartClient;

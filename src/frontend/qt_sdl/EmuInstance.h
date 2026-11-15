@@ -28,6 +28,8 @@
 #include "Window.h"
 #include "Config.h"
 #include "SaveManager.h"
+#include "CoopLink.h"
+#include "CoopDebug.h"
 
 const int kMaxWindows = 4;
 
@@ -114,6 +116,9 @@ public:
     void osdAddMessage(unsigned int color, const char* fmt, ...);
 
     bool emuIsActive();
+    // true when the screen panels should show a picture: a ROM is running, or we are a co-op client
+    bool screenIsLive() { return emuIsActive() || coopClient.isConnected(); }
+    CoopClient& getCoopClient() { return coopClient; }
     void emuStop(melonDS::Platform::StopReason reason);
 
     bool usesOpenGL();
@@ -374,11 +379,17 @@ private:
     melonDS::u32 hotkeyPress, hotkeyRelease;
 
     melonDS::u32 inputMask;
+    CoopHost coopHost;
+    CoopClient coopClient;
+    CoopDebug coopDebug;
+    bool coopInputTouching = false;
+    melonDS::u16 coopInputX = 0, coopInputY = 0;
 
     bool isTouching;
     melonDS::u16 touchX, touchY;
 
     friend class EmuThread;
+    friend class CoopDebug;
     friend class MainWindow;
 };
 
